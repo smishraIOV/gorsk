@@ -2,6 +2,7 @@
 acct_verify_proof
 verify_roots
 
+cache/
 
 # macos
 .DS_Store
