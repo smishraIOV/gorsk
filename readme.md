@@ -45,13 +45,13 @@ Verify `eth_getProof` responses:
 
 ```bash
 # Verify EOA account proof
-go run ./cmd/acct_verify_proof/ 0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826
+go run ./cmd/verify_proof/ 0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826
 
 # Verify contract with storage slot 0
-go run ./cmd/acct_verify_proof/ 0x77045E71a7A2c50903d88e564cD72fab11e82051 0x0
+go run ./cmd/verify_proof/ 0x77045E71a7A2c50903d88e564cD72fab11e82051 0x0
 
 # Verify multiple storage slots
-go run ./cmd/acct_verify_proof/ <contract_address> 0x0,0x1,0x2
+go run ./cmd/verify_proof/ <contract_address> 0x0,0x1,0x2
 ```
 
 ## Using the Go Library
