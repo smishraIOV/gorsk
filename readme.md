@@ -61,19 +61,40 @@ go run ./cmd/verify_proof/ <contract_address> 0x0,0x1,0x2
 ```go
 import "gorsk/rskblocks"
 
-// Create input from hex strings (e.g., from RPC)
-input, _ := rskblocks.NewBlockHeaderInputFromHex(
-    parentHash, sha3Uncles, coinbase, stateRoot, txTrieRoot,
-    receiptTrieRoot, logsBloom, difficulty, number, gasLimit,
-    gasUsed, timestamp, extraData, paidFees, minimumGasPrice,
-    uncleCount, ummRoot, txExecutionSublistsEdges,
-)
+// Create input from RPC data
+input := &rskblocks.BlockHeaderInput{
+    ParentHash:                parentHash,
+    UnclesHash:                unclesHash,
+    Coinbase:                  coinbase,
+    StateRoot:                 stateRoot,
+    TxTrieRoot:                txTrieRoot,
+    ReceiptTrieRoot:           receiptsRoot,
+    LogsBloom:                 logsBloom,     // [256]byte
+    Difficulty:                difficulty,
+    Number:                    number,
+    GasLimit:                  gasLimit,
+    GasUsed:                   gasUsed,
+    Timestamp:                 timestamp,
+    ExtraData:                 extraData,
+    PaidFees:                  paidFees,
+    MinimumGasPrice:           minimumGasPrice,
+    UncleCount:                uncleCount,
+    BitcoinMergedMiningHeader: btcHeader,
+    TxExecutionSublistsEdges:  edges,         // []int16
+    BaseEvent:                 baseEvent,     // V2 only
+    UmmRoot:                   ummRoot,       // *[]byte
+}
 
-// Get config for the block
-config := rskblocks.ConfigForBlockNumber(blockNum, "regtest")
+// Get config for the network and block number
+config := rskblocks.ConfigForBlockNumber(blockNum, "mainnet")
+// Or use defaults:
+// config := rskblocks.DefaultRegtestConfig()
 
 // Compute block hash
-hash, _ := rskblocks.ComputeBlockHash(input, config)
+hash := rskblocks.ComputeBlockHash(input, config)
+
+// Get the RLP encoding for debugging
+encoded := rskblocks.GetEncodedBlockHeader(input, config)
 ```
 
 ### Account Proof Verification
@@ -118,16 +139,72 @@ RSK uses a **binary trie** (not Ethereum's hexary MPT) and a **unified trie** fo
 
 | RSKIP | Description |
 |-------|-------------|
-| **RSKIP-92** | Excludes merged mining merkle proof and coinbase from hash |
-| **RSKIP-351** | V1 headers use extensionData instead of raw logsBloom. extensionHash = Keccak256(RLP([Keccak256(logsBloom), edgesBytes])) |
-| **RSKIP-UMM** | ummRoot present (even if empty) for blocks after activation |
-| **RSKIP-144** | TxExecutionSublistsEdges for parallel transaction execution |
+| **RSKIP-92** | Excludes merged mining merkle proof and coinbase from hash (active from Orchid) |
+| **RSKIP-144** | TxExecutionSublistsEdges for parallel transaction execution (active from Reed810) |
+| **RSKIP-351** | V1 headers use extensionData instead of raw logsBloom (active from Reed810) |
+| **RSKIP-535** | V2 headers add baseEvent to extension hash computation (active from Vetiver900) |
+| **RSKIP-UMM** | ummRoot field added to block headers (active from Papyrus200) |
+
+### Header Versions
+
+| Version | Activated By | Extension Hash Formula |
+|---------|--------------|------------------------|
+| **V0** | Default | N/A - uses raw logsBloom in encoding |
+| **V1** | RSKIP-351 | `Keccak256(RLP([Keccak256(logsBloom), edgesBytes]))` |
+| **V2** | RSKIP-535 | `Keccak256(RLP([Keccak256(logsBloom), baseEvent, edgesBytes]))` |
+
+For V1/V2 headers: `extensionData = RLP([version, extensionHash])`
+
+## Network-Specific Differences
+
+### Regtest
+- **Header Version**: V2 (all RSKIPs active from genesis)
+- **gasLimit Encoding**: 4-byte with leading zeros (e.g., `00989680`)
+- **ummRoot**: Always included (empty if not present)
+- **RSKIP Activations**: All active from block 0
+
+### Mainnet
+- **Header Version**: V0 (RSKIP-351/535 NOT YET ACTIVATED)
+- **gasLimit Encoding**: Minimal bytes (e.g., `989680`)
+- **ummRoot**: Included after Papyrus200 (block 2,392,700)
+- **RSKIP Activations**:
+  - Orchid (RSKIP-92): Block 729,000
+  - Papyrus200 (UMM): Block 2,392,700
+  - Reed810 (V1): NOT ACTIVATED (-1)
+  - Vetiver900 (V2): NOT ACTIVATED (-1)
+
+### Testnet
+- **Header Version**: V1 after Reed810 (block 7,139,600)
+- **gasLimit Encoding**: Minimal bytes
+- **ummRoot**: Included after Papyrus200 (block 863,000)
+- **RSKIP Activations**:
+  - Orchid (RSKIP-92): Block 0
+  - Papyrus200 (UMM): Block 863,000
+  - Reed810 (V1): Block 7,139,600
+  - Vetiver900 (V2): NOT ACTIVATED (-1)
+
+### Configuration Summary
+
+| Network | Version | gasLimit | ummRoot After | Use4ByteGasLimit |
+|---------|---------|----------|---------------|------------------|
+| Regtest | V2 | 4-byte | Block 0 | true |
+| Mainnet | V0 | minimal | Block 2,392,700 | false |
+| Testnet | V0/V1 | minimal | Block 863,000 | false |
 
 ## Encoding Details
 
-- **gasLimit**: Stored as 4-byte array with leading zeros preserved
+- **gasLimit**: Network-specific (4-byte for regtest, minimal for mainnet/testnet)
 - **minimumGasPrice**: 0 encodes as single zero byte (0x00), not empty (0x80)
 - **TxExecutionSublistsEdges**: Empty array `[]` is different from `nil` in extension hash
+- **baseEvent**: V2 only - included in extension hash even if empty/nil
+- **ummRoot**: Auto-added as empty if `IncludeUmmRoot=true` and input is nil
+
+### Auto-added Fields
+
+When using `ConfigForBlockNumber()` or `DefaultRegtestConfig()`:
+
+- **ummRoot**: If `IncludeUmmRoot=true` and input has no ummRoot, an empty ummRoot is automatically added
+- **edges**: For V1/V2 headers, if input has nil edges, an empty edge array `[]` is automatically added (required for extensionData computation)
 
 ## Use Cases
 

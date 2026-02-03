@@ -21,7 +21,7 @@ type BlockHeader struct {
 	LogsBloom       [256]byte      // 256-byte bloom filter
 	Difficulty      *big.Int       // Block difficulty
 	Number          *big.Int       // Block number
-	GasLimit        []byte         // Gas limit - stored as raw bytes to preserve encoding
+	GasLimit        []byte         // Gas limit - stored as minimal raw bytes (no leading zeros)
 	GasUsed         *big.Int       // Gas used
 	Timestamp       *big.Int       // Unix timestamp
 	ExtraData       []byte         // Extra data (max 32 bytes)
@@ -37,12 +37,14 @@ type BlockHeader struct {
 	// Optional fields - use pointer to distinguish nil from empty
 	UmmRoot                  *[]byte // UMM root (nil = not present, empty = present but empty)
 	TxExecutionSublistsEdges []int16 // RSKIP-144 parallel transaction execution edges
+	BaseEvent                []byte  // RSKIP-535 base event (V2 headers)
 
 	// RSKIP-92 encoding flag
 	UseRskip92Encoding bool
 
-	// RSKIP-351: Header version (0 for V0, 1 for V1)
-	// V1 headers use extensionData instead of raw logsBloom in encoding
+	// RSKIP-351/535: Header version (0 for V0, 1 for V1, 2 for V2)
+	// V1/V2 headers use extensionData instead of raw logsBloom in encoding
+	// V2 adds baseEvent to extensionHash computation
 	Version byte
 }
 
@@ -79,11 +81,12 @@ func (h *BlockHeader) getEncoded(withMergedMiningFields, withMerkleProofAndCoinb
 	fields = append(fields, h.TxTrieRoot.Bytes())
 	fields = append(fields, h.ReceiptTrieRoot.Bytes())
 
-	// RSKIP-351: For V1 headers in compressed mode, use extensionData
+	// RSKIP-351/535: For V1/V2 headers in compressed mode, use extensionData
 	// instead of raw logsBloom
-	if h.Version == 1 && compressed {
+	if (h.Version == 1 || h.Version == 2) && compressed {
 		// extensionData = RLP([version, extensionHash])
-		// where extensionHash = Keccak256(RLP([logsBloom, edges]))
+		// V1: extensionHash = Keccak256(RLP([logsBloomHash, edges]))
+		// V2: extensionHash = Keccak256(RLP([logsBloomHash, baseEvent, edges]))
 		extensionData := h.computeExtensionData()
 		fields = append(fields, extensionData)
 	} else {
@@ -107,14 +110,15 @@ func (h *BlockHeader) getEncoded(withMergedMiningFields, withMerkleProofAndCoinb
 
 	// For V0 headers or non-compressed V1, add extra fields
 	if h.Version == 0 {
-		// V0: add edges if present
-		if len(h.TxExecutionSublistsEdges) > 0 {
+		// V0: add edges if present (including empty edges [] which encodes to 0x80)
+		// nil means edges field doesn't exist; [] means it exists but is empty
+		if h.TxExecutionSublistsEdges != nil {
 			fields = append(fields, encodeShortsToRLP(h.TxExecutionSublistsEdges))
 		}
 	} else if h.Version == 1 && !compressed {
 		// V1 non-compressed: add version and edges
 		fields = append(fields, []byte{h.Version})
-		if len(h.TxExecutionSublistsEdges) > 0 {
+		if h.TxExecutionSublistsEdges != nil {
 			fields = append(fields, encodeShortsToRLP(h.TxExecutionSublistsEdges))
 		}
 	}
@@ -134,9 +138,10 @@ func (h *BlockHeader) getEncoded(withMergedMiningFields, withMerkleProofAndCoinb
 	return buf.Bytes()
 }
 
-// computeExtensionData computes the extensionData for V1 headers.
+// computeExtensionData computes the extensionData for V1/V2 headers.
 // extensionData = RLP([version, extensionHash])
-// where extensionHash = Keccak256(RLP([Keccak256(logsBloom), edgesBytes]))
+// V1: extensionHash = Keccak256(RLP([Keccak256(logsBloom), edgesBytes]))
+// V2: extensionHash = Keccak256(RLP([Keccak256(logsBloom), baseEvent, edgesBytes]))
 // Note: logsBloom is HASHED before being included in the extension content!
 func (h *BlockHeader) computeExtensionData() []byte {
 	// First, hash the logsBloom (Java: HashUtil.keccak256(this.getLogsBloom()))
@@ -155,15 +160,27 @@ func (h *BlockHeader) computeExtensionData() []byte {
 	}
 	// Note: if edges is nil, edgesBytes stays nil and won't be included
 
-	// Encode the extension content: [logsBloomHash, edgesBytes]
-	// Java: RLP.encodeList(RLP.encodeElement(logsBloomHash), ByteUtil.shortsToRLP(edges))
+	// Build extension content based on version
 	var extContent bytes.Buffer
-	if edgesBytes != nil {
-		// edges exists (even if empty) - include in encoding
-		rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes(), edgesBytes})
+	if h.Version == 2 {
+		// V2: [logsBloomHash, baseEvent, edgesBytes]
+		// baseEvent is included even if empty (encodes as 0x80)
+		baseEvent := h.BaseEvent
+		if baseEvent == nil {
+			baseEvent = []byte{}
+		}
+		if edgesBytes != nil {
+			rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes(), baseEvent, edgesBytes})
+		} else {
+			rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes(), baseEvent})
+		}
 	} else {
-		// edges is nil - only include logsBloomHash
-		rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes()})
+		// V1: [logsBloomHash, edgesBytes]
+		if edgesBytes != nil {
+			rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes(), edgesBytes})
+		} else {
+			rlp.Encode(&extContent, []interface{}{logsBloomHash.Bytes()})
+		}
 	}
 
 	// Hash the extension content to get extensionHash

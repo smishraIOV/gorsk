@@ -2,9 +2,10 @@ package rskblocks
 
 import (
 	"bytes"
-	"gorsk/rsktrie"
 	"math/big"
 	"testing"
+
+	"github.com/ethereum-optimism/optimism/op-service/rsk/gorsk/rsktrie"
 
 	"github.com/ethereum/go-ethereum/common"
 )

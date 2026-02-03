@@ -69,6 +69,8 @@ type BlockHeaderInput struct {
 
 	// Optional fields
 	TxExecutionSublistsEdges []int16 // RSKIP-144 parallel transaction execution edges
+	UmmRoot                  *[]byte // UMM root (nil = not present, empty = present but empty)
+	BaseEvent                []byte  // RSKIP-535 base event (V2 headers)
 }
 
 // BlockHashConfig contains configuration options for block hash computation.
@@ -76,46 +78,78 @@ type BlockHashConfig struct {
 	// UseRskip92Encoding: If true, excludes merkle proof and coinbase from hash (default: true for post-orchid)
 	UseRskip92Encoding bool
 
-	// Version: Block header version (0 for V0, 1 for V1 per RSKIP-351)
+	// Version: Block header version (0 for V0, 1 for V1, 2 for V2)
 	Version byte
 
 	// IncludeUmmRoot: If true, includes UMM root in encoding (default: true for post-UMM activation)
 	IncludeUmmRoot bool
+
+	// Use4ByteGasLimit: If true, pad gasLimit to 4 bytes (regtest). If false, use minimal bytes (mainnet/testnet).
+	Use4ByteGasLimit bool
 }
 
 // DefaultRegtestConfig returns the default configuration for regtest mode.
-// All RSKIPs are active from block 0 in regtest.
+// All RSKIPs are active from block 0 in regtest, including RSKIP-535 (V2 headers).
 func DefaultRegtestConfig() BlockHashConfig {
 	return BlockHashConfig{
 		UseRskip92Encoding: true,
-		Version:            1,
+		Version:            2, // V2 for RSKIP-535 (baseEvent support)
 		IncludeUmmRoot:     true,
+		Use4ByteGasLimit:   true, // Regtest uses 4-byte gasLimit
 	}
 }
 
 // ConfigForBlockNumber returns the appropriate config based on block number and network.
-// For now, this only supports regtest where all RSKIPs are active.
+// These values are from RSKj's main.conf, testnet.conf, and reference.conf.
+//
+// IMPORTANT: IncludeUmmRoot only controls whether UMM activation is enabled for the network.
+// The actual ummRoot should only be included if the block has one (check RPC response).
+//
+// Mainnet activation heights (from main.conf):
+//   - orchid = 729000 (RSKIP-92)
+//   - papyrus200 = 2392700 (UMM)
+//   - reed810 = -1 (RSKIP-144, RSKIP-351/V1 - NOT YET ACTIVATED)
+//   - vetiver900 = -1 (RSKIP-535/V2 - NOT YET ACTIVATED)
+//
+// Testnet activation heights (from testnet.conf):
+//   - orchid = 0 (RSKIP-92)
+//   - papyrus200 = 863000 (UMM)
+//   - reed810 = 7139600 (RSKIP-144, RSKIP-351/V1)
+//   - vetiver900 = -1 (RSKIP-535/V2 - NOT YET ACTIVATED)
+//
+// Regtest: All RSKIPs active from genesis, uses V2 headers
 func ConfigForBlockNumber(blockNum int64, network string) BlockHashConfig {
 	switch network {
 	case "regtest":
-		// In regtest, all RSKIPs are active from genesis
+		// In regtest, all RSKIPs are active from genesis (block 0)
+		// This includes RSKIP-535 (V2 headers with baseEvent)
 		return BlockHashConfig{
 			UseRskip92Encoding: true,
-			Version:            1,
+			Version:            2, // V2 for RSKIP-535
 			IncludeUmmRoot:     true,
+			Use4ByteGasLimit:   true, // Regtest uses 4-byte gasLimit
 		}
 	case "mainnet":
-		// Mainnet activation heights (approximate)
+		// Mainnet: RSKIP-351 (V1) and RSKIP-535 (V2) are NOT YET ACTIVE
+		// UMM is active from papyrus200 (2392700)
 		return BlockHashConfig{
-			UseRskip92Encoding: blockNum >= 0,                   // Orchid was early
-			Version:            boolToByte(blockNum >= 5468000), // RSKIP-351
-			IncludeUmmRoot:     blockNum >= 4598500,             // UMM activation
+			UseRskip92Encoding: blockNum >= 729000,  // orchid
+			Version:            0,                   // RSKIP-351 NOT active (reed810 = -1)
+			IncludeUmmRoot:     blockNum >= 2392700, // UMM active from papyrus200
+			Use4ByteGasLimit:   false,               // Mainnet uses minimal gasLimit
 		}
 	case "testnet":
+		// Testnet: RSKIP-351 (V1) activated at reed810 = 7139600
+		// RSKIP-535 (V2) NOT YET ACTIVE (vetiver900 = -1)
+		var version byte = 0
+		if blockNum >= 7139600 {
+			version = 1 // V1 after reed810
+		}
 		return BlockHashConfig{
-			UseRskip92Encoding: true,
-			Version:            1,
-			IncludeUmmRoot:     true,
+			UseRskip92Encoding: true, // orchid = 0
+			Version:            version,
+			IncludeUmmRoot:     blockNum >= 863000, // UMM active from papyrus200
+			Use4ByteGasLimit:   false,              // Testnet uses minimal gasLimit
 		}
 	default:
 		// Default to regtest behavior
@@ -133,10 +167,19 @@ func ComputeBlockHash(input *BlockHeaderInput, config BlockHashConfig) common.Ha
 // InputToBlockHeader converts BlockHeaderInput to a BlockHeader struct
 // with proper encoding rules applied.
 func InputToBlockHeader(input *BlockHeaderInput, config BlockHashConfig) *BlockHeader {
-	// GasLimit must be stored as 4-byte array with leading zeros preserved
-	gasLimitBytes := make([]byte, 4)
-	if input.GasLimit != nil {
-		input.GasLimit.FillBytes(gasLimitBytes)
+	// GasLimit encoding depends on network:
+	// - Regtest: 4-byte with leading zeros (Use4ByteGasLimit=true)
+	// - Mainnet/Testnet: minimal bytes (Use4ByteGasLimit=false)
+	var gasLimitBytes []byte
+	if input.GasLimit != nil && input.GasLimit.Sign() > 0 {
+		if config.Use4ByteGasLimit {
+			gasLimitBytes = make([]byte, 4)
+			input.GasLimit.FillBytes(gasLimitBytes) // 4-byte with leading zeros
+		} else {
+			gasLimitBytes = input.GasLimit.Bytes() // Minimal bytes
+		}
+	} else {
+		gasLimitBytes = []byte{} // Empty for zero
 	}
 
 	header := &BlockHeader{
@@ -167,24 +210,39 @@ func InputToBlockHeader(input *BlockHeaderInput, config BlockHashConfig) *BlockH
 		Version:            config.Version,
 	}
 
-	// UmmRoot: present (even if empty) when IncludeUmmRoot is true
+	// UmmRoot handling:
+	// For regtest, all RSKIPs are active, so ummRoot should always be included (even if empty).
+	// For mainnet/testnet, only include if explicitly present in the RPC response.
+	// The config.IncludeUmmRoot flag indicates if UMM is active for the network.
 	if config.IncludeUmmRoot {
-		emptyUmmRoot := []byte{}
-		header.UmmRoot = &emptyUmmRoot
+		if input.UmmRoot != nil {
+			header.UmmRoot = input.UmmRoot
+		} else {
+			// Auto-add empty ummRoot for networks where UMM is active (e.g., regtest)
+			emptyUmm := []byte{}
+			header.UmmRoot = &emptyUmm
+		}
+	} else if input.UmmRoot != nil {
+		// UMM not active by config, but input explicitly has ummRoot (shouldn't happen normally)
+		header.UmmRoot = input.UmmRoot
 	}
 
 	// TxExecutionSublistsEdges handling
-	// For V1 headers, empty edges [] is different from nil
-	if config.Version == 1 {
-		// V1 headers always have edges (even if empty)
-		if input.TxExecutionSublistsEdges != nil {
-			header.TxExecutionSublistsEdges = input.TxExecutionSublistsEdges
-		} else {
-			header.TxExecutionSublistsEdges = []int16{}
-		}
-	} else if len(input.TxExecutionSublistsEdges) > 0 {
-		// V0 headers only include edges if present
+	// RSKj includes edges if not null (even if empty array)
+	// For V1/V2 compressed headers, edges are in extensionData
+	// For V0 and V1/V2 non-compressed, edges are added as a separate field if not null
+	if input.TxExecutionSublistsEdges != nil {
 		header.TxExecutionSublistsEdges = input.TxExecutionSublistsEdges
+	} else if config.Version >= 1 {
+		// V1/V2 headers always have edges (even if empty) for extensionData computation
+		header.TxExecutionSublistsEdges = []int16{}
+	}
+	// For V0 with nil edges, leave as nil (won't be included in encoding)
+
+	// BaseEvent (V2 only)
+	// RSKj includes baseEvent in V2 extension hash even if empty
+	if config.Version == 2 {
+		header.BaseEvent = input.BaseEvent // nil or empty both work
 	}
 
 	return header

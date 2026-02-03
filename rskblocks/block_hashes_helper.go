@@ -1,7 +1,7 @@
 package rskblocks
 
 import (
-	"gorsk/rsktrie"
+	"github.com/ethereum-optimism/optimism/op-service/rsk/gorsk/rsktrie"
 
 	"github.com/ethereum/go-ethereum/rlp"
 )
