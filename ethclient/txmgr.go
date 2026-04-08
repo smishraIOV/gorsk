@@ -35,8 +35,8 @@ var RSKTxMgrConfig = struct {
 	SafeAbortNonceTooLowCount: 3,
 	FeeLimitMultiplier:        5,
 	FeeLimitThresholdGwei:     1.0,             // RSK has lower fees
-	MinTipCapGwei:             0.06,            // RSK minimum gas price is often 0.06 gwei
-	MinBaseFeeGwei:            0.06,            // Match minimumGasPrice
+	MinTipCapGwei:             0,               // 0.06,            // RSK minimum gas price is often 0.06 gwei
+	MinBaseFeeGwei:            0,               // 0.06,            // Match minimumGasPrice
 	RebroadcastInterval:       1 * time.Second, // RSK block time
 	ResubmissionTimeout:       1 * time.Second, // ~1 block
 	NetworkTimeout:            10 * time.Second,
