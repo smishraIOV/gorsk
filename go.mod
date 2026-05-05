@@ -1,4 +1,4 @@
-module gorsk
+module github.com/smishraIOV/gorsk
 
 go 1.24.0
 

@@ -36,7 +36,7 @@
 // The easiest way to use this package with op-service is via NewRSKTxMgrConfig:
 //
 //	import (
-//	    "gorsk/ethclient"
+//	    "github.com/smishraIOV/gorsk/ethclient"
 //	    "github.com/ethereum-optimism/optimism/op-service/txmgr"
 //	)
 //

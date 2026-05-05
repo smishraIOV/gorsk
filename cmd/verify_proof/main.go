@@ -34,8 +34,8 @@ import (
 	"strings"
 	"time"
 
-	"gorsk/ethclient"
-	"gorsk/rskblocks"
+	"github.com/smishraIOV/gorsk/ethclient"
+	"github.com/smishraIOV/gorsk/rskblocks"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gorsk/rskblocks"
+	"github.com/smishraIOV/gorsk/rskblocks"
 
 	"github.com/ethereum/go-ethereum/common"
 )
