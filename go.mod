@@ -79,6 +79,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ethereum/go-ethereum => ../op-geth
+replace github.com/ethereum/go-ethereum => github.com/ethereum-optimism/op-geth v1.101702.2-rc.2
 
 replace github.com/ethereum-optimism/optimism => ../optimism
